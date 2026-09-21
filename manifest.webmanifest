@@ -1,0 +1,19 @@
+{
+  "name": "ジムログ",
+  "short_name": "ジムログ",
+  "description": "日々のジムのトレーニングを記録し、種目ごとの重量とボリュームの推移を確認するアプリ。データは端末内にのみ保存されます。",
+  "lang": "ja",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F1F3F6",
+  "theme_color": "#16325E",
+  "categories": ["health", "fitness", "productivity"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
