@@ -384,7 +384,7 @@
   var STEPS = [0.5, 1, 1.25, 2, 2.5, 5, 10];   // ＋− ボタンの刻み（kg）
   var DEFAULT_STEP = 2.5;
   // sw.js の CACHE と必ず揃える（ずれていれば設定画面が警告を出す）
-  var APP_VERSION = "v8";
+  var APP_VERSION = "v9";
   var APP_BUILT = "2026-09-23";
   // ジャンル＝その日のメニュー構成。初回だけ用意し、以降は利用者が自由に編集する
   var DEFAULT_GENRES = [
@@ -475,7 +475,7 @@
   function seedList(){
     var out = [];
     SEED_EXERCISES.forEach(function(g){
-      g[1].forEach(function(n){ out.push({ name: n, cat: g[0] }); });
+      g[1].forEach(function(n){ out.push({ name: n, cat: g[0], step: DEFAULT_STEP }); });
     });
     return out;
   }
@@ -1728,11 +1728,24 @@
     var exIn2 = (obj && Array.isArray(obj.exercises)) ? obj.exercises
               : (obj && Array.isArray(obj.custom)) ? obj.custom : null;
     if (exIn2){
-      normEx(exIn2).forEach(function(c){ if (findEx(c.name) < 0) state.exercises.push(c); });
+      // 既にある種目は、バックアップ側のカテゴリと刻み幅で上書きする。
+      // （復元先にたねの種目が入っていても、保存した設定がそのまま戻るように）
+      normEx(exIn2).forEach(function(c){
+        var i = findEx(c.name);
+        if (i < 0){ state.exercises.push(c); return; }
+        state.exercises[i].cat = c.cat;
+        state.exercises[i].step = c.step;
+      });
       state.exInit = true;
     }
     if (obj && Array.isArray(obj.genres)){
-      normGenres(obj.genres).forEach(function(g){ if (findGenre(g.name) < 0) state.genres.push(g); });
+      // 同名のジャンルは中身を統合する（こちらにしかない種目は残す）
+      normGenres(obj.genres).forEach(function(g){
+        var i = findGenre(g.name);
+        if (i < 0){ state.genres.push(g); return; }
+        var cur = state.genres[i].items;
+        g.items.forEach(function(nm){ if (cur.indexOf(nm) < 0) cur.push(nm); });
+      });
       state.genresInit = true;
     }
     return n;
