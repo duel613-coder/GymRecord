@@ -25,6 +25,9 @@
     --red:#AE332A;
     --shadow:0 1px 2px rgba(18,26,44,.07), 0 6px 18px -8px rgba(18,26,44,.16);
     --radius:14px;
+    /* 部位の色（dataviz の既定カテゴリ配色。順序が CVD 安全性を担保するので入れ替えない） */
+    --cat0:#2a78d6; --cat1:#eb6834; --cat2:#1baf7a; --cat3:#eda100;
+    --cat4:#e87ba4; --cat5:#008300; --cat6:#4a3aa7;
     --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",system-ui,sans-serif;
   }
   @media (prefers-color-scheme: dark){
@@ -36,6 +39,8 @@
       --gold:#D9AB41; --gold-soft:#332A15;
       --red:#E3705F;
       --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 22px -10px rgba(0,0,0,.6);
+      --cat0:#3987e5; --cat1:#d95926; --cat2:#199e70; --cat3:#c98500;
+      --cat4:#d55181; --cat5:#008300; --cat6:#9085e9;
     }
   }
   :root[data-theme="dark"]{
@@ -46,6 +51,8 @@
     --gold:#D9AB41; --gold-soft:#332A15;
     --red:#E3705F;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 22px -10px rgba(0,0,0,.6);
+    --cat0:#3987e5; --cat1:#d95926; --cat2:#199e70; --cat3:#c98500;
+    --cat4:#d55181; --cat5:#008300; --cat6:#9085e9;
   }
 
   *{box-sizing:border-box}
@@ -164,6 +171,44 @@
   .hmemo{font-size:12.5px; color:var(--ink-2); background:var(--surface-2); border-radius:9px; padding:7px 9px}
   .hopen{align-self:flex-start; margin-top:2px; height:31px; padding:0 12px; border-radius:8px;
          border:1px solid var(--line-strong); background:transparent; font-size:12px; font-weight:700; color:var(--ink-2)}
+
+  /* ---------- カレンダー ---------- */
+  .modes{display:flex; gap:1px; background:var(--line); border:1px solid var(--line);
+         border-radius:11px; overflow:hidden}
+  .modes button{flex:1; border:0; background:var(--surface); padding:9px 4px; font-size:13px;
+                font-weight:700; color:var(--ink-3)}
+  .modes button[aria-pressed="true"]{background:var(--accent-soft); color:var(--accent)}
+
+  .cal{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+       box-shadow:var(--shadow); padding:11px 11px 13px}
+  .calnav{display:flex; align-items:center; gap:8px; margin-bottom:10px}
+  .calnav .m{flex:1; text-align:center; font-size:15.5px; font-weight:800; font-variant-numeric:tabular-nums}
+  .calnav button{width:34px; height:34px; flex:none; border:1px solid var(--line-strong);
+                 background:var(--surface); border-radius:9px; color:var(--ink-2); font-size:15px}
+  .calnav button:disabled{opacity:.32}
+  .calwd{display:grid; grid-template-columns:repeat(7,1fr); gap:3px; margin-bottom:3px}
+  .calwd span{text-align:center; font-size:10px; font-weight:700; color:var(--ink-3); padding:2px 0}
+  .calwd span.sat{color:#3B76C4} .calwd span.sun{color:var(--red)}
+  .calgrid{display:grid; grid-template-columns:repeat(7,1fr); gap:3px}
+  .cday{min-height:44px; border:1px solid transparent; background:transparent; border-radius:8px;
+        padding:3px 2px 2px; display:flex; flex-direction:column; align-items:center; gap:3px}
+  .cday .dn{font-size:12px; font-weight:700; color:var(--ink-3); font-variant-numeric:tabular-nums; line-height:1}
+  .cday.pad{visibility:hidden}
+  .cday.has{background:var(--surface-2)}
+  .cday.has .dn{color:var(--ink)}
+  .cday.today{border-color:var(--accent-line)}
+  .cday.sel{background:var(--accent); border-color:var(--accent)}
+  .cday.sel .dn{color:var(--accent-ink)}
+  .dots{display:flex; flex-wrap:wrap; justify-content:center; gap:2px; line-height:0}
+  .dots i{width:7px; height:7px; border-radius:2px; display:block}
+  .cday.sel .dots i{box-shadow:0 0 0 1px rgba(255,255,255,.55)}
+  .more{font-size:8.5px; font-weight:700; color:var(--ink-3); line-height:1}
+  .cday.sel .more{color:var(--accent-ink)}
+
+  .legend{display:flex; flex-wrap:wrap; gap:4px 10px; padding:11px 2px 0; margin-top:10px;
+          border-top:1px solid var(--line)}
+  .legend span{display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--ink-2)}
+  .legend i{width:8px; height:8px; border-radius:2px; display:block}
 
   .pick{display:flex; align-items:center; gap:9px; background:var(--surface); border:1px solid var(--line);
         border-radius:var(--radius); padding:9px 11px}
@@ -353,7 +398,8 @@
     days: {}, exercises: [], exInit: false, genres: [], genresInit: false, lastBackup: 0, savedAt: 0,
     view: "record", date: keyOf(new Date()), chartEx: null, openDays: {},
     sheetEdit: false, sheetMode: "pick", editGenre: -1, lastCat: "その他", exOpen: false,
-    dbxOpen: null   // null = 未接続なら開く / 接続済みなら畳む
+    dbxOpen: null,  // null = 未接続なら開く / 接続済みなら畳む
+    histMode: "cal", calMonth: null, selDay: null
   };
   var idb = null, saveTimer = null, saving = false, localFail = false;
   // Dropbox（設定・トークンは端末内にのみ保存し、コードには一切含めない）
@@ -901,13 +947,121 @@
   }
 
   /* ===================== 履歴 ===================== */
+  function catOf(name){
+    var i = findEx(name);
+    var c = i >= 0 ? state.exercises[i].cat : "その他";
+    var ci = CATS.indexOf(c);
+    return ci >= 0 ? ci : CATS.length - 1;
+  }
+  // その日に含まれる部位を CATS の順で返す
+  function catsOfDay(day){
+    var seen = {}, out = [];
+    (day.entries || []).forEach(function(e){ seen[catOf(e.name)] = 1; });
+    CATS.forEach(function(_, i){ if (seen[i]) out.push(i); });
+    return out;
+  }
+  function monthKey(d){ return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); }
+  function shiftMonth(mk, n){
+    var p = mk.split("-"), d = new Date(+p[0], +p[1]-1 + n, 1);
+    return monthKey(d);
+  }
+  function trainedDays(){
+    return Object.keys(state.days).filter(function(k){
+      var d = state.days[k]; return d && d.entries && d.entries.length;
+    });
+  }
+
   function viewHistory(){
-    var keys = Object.keys(state.days).filter(function(k){
-      var d = state.days[k]; return d && d.entries && d.entries.length; }).sort().reverse();
-
+    var keys = trainedDays().sort().reverse();
     if (!keys.length)
-      return '<div class="empty"><div class="big">NO HISTORY</div><p>記録したトレーニングがここに日付順で並びます。</p></div>';
+      return '<div class="empty"><div class="big">NO HISTORY</div><p>記録したトレーニングがここに並びます。</p></div>';
 
+    var h = '<div class="modes">' +
+      '<button data-act="histmode" data-v="cal" aria-pressed="' + (state.histMode === "cal") + '">カレンダー</button>' +
+      '<button data-act="histmode" data-v="list" aria-pressed="' + (state.histMode === "list") + '">リスト</button></div>';
+    return h + (state.histMode === "cal" ? viewCalendar(keys) : viewHistoryList(keys));
+  }
+
+  function viewCalendar(keys){
+    if (!state.calMonth) state.calMonth = monthKey(parseKey(state.selDay || keys[0]));
+    var mk = state.calMonth, p = mk.split("-");
+    var y = +p[0], m = +p[1];
+    var first = new Date(y, m-1, 1), lastDay = new Date(y, m, 0).getDate();
+    var thisMonth = monthKey(new Date());
+
+    // 月のまとめ
+    var inMonth = keys.filter(function(k){ return k.slice(0,7) === mk; });
+    var mVol = 0, mSets = 0;
+    inMonth.forEach(function(k){ mVol += volOf(state.days[k]); mSets += setCount(state.days[k]); });
+
+    var h = '<div class="cal">';
+    h += '<div class="calnav">' +
+         '<button data-act="calmove" data-v="-1" aria-label="前の月">‹</button>' +
+         '<span class="m">' + y + '年' + m + '月</span>' +
+         '<button data-act="calmove" data-v="1" aria-label="次の月"' +
+           (mk >= thisMonth ? " disabled" : "") + '>›</button></div>';
+
+    h += '<div class="calwd">' + WD.map(function(w, i){
+      return '<span class="' + (i === 0 ? "sun" : i === 6 ? "sat" : "") + '">' + w + '</span>';
+    }).join("") + '</div>';
+
+    h += '<div class="calgrid">';
+    for (var i = 0; i < first.getDay(); i++) h += '<div class="cday pad"></div>';
+    var today = keyOf(new Date());
+    for (var dd = 1; dd <= lastDay; dd++){
+      var k = mk + "-" + String(dd).padStart(2,"0");
+      var day = state.days[k];
+      var has = !!(day && day.entries && day.entries.length);
+      var cls = "cday" + (has ? " has" : "") + (k === today ? " today" : "") + (k === state.selDay ? " sel" : "");
+      h += '<button class="' + cls + '"' + (has ? ' data-act="selday" data-k="' + k + '"' : "") + '>' +
+           '<span class="dn">' + dd + '</span>';
+      if (has){
+        var cs = catsOfDay(day);
+        h += '<span class="dots">';
+        cs.slice(0,4).forEach(function(ci){ h += '<i style="background:var(--cat' + ci + ')"></i>'; });
+        h += '</span>';
+        if (cs.length > 4) h += '<span class="more">+' + (cs.length - 4) + '</span>';
+      }
+      h += '</button>';
+    }
+    h += '</div>';
+
+    h += '<div class="legend">' + CATS.map(function(c, i){
+      return '<span><i style="background:var(--cat' + i + ')"></i>' + c + '</span>';
+    }).join("") + '</div></div>';
+
+    h += '<div class="sum">' +
+      '<div><small>この月の日数</small><b>' + inMonth.length + '</b></div>' +
+      '<div><small>セット</small><b>' + mSets + '</b></div>' +
+      '<div><small>ボリューム</small><b>' + fmt(mVol) + '<span class="u">kg</span></b></div></div>';
+
+    if (state.selDay && state.days[state.selDay]) h += dayDetail(state.selDay);
+    else h += '<p class="note">日付をタップすると、その日の内容が出ます。色は部位です。</p>';
+    return h;
+  }
+
+  function dayDetail(k){
+    var d = state.days[k], dt = parseKey(k);
+    var h = '<article class="hday"><div class="hhead">' +
+            '<span class="hdate">' + (dt.getMonth()+1) + '/' + dt.getDate() + '</span>' +
+            '<span class="hwd">(' + WD[dt.getDay()] + ')</span>' +
+            '<span class="hmeta"><b>' + fmt(volOf(d)) + '</b> kg ・ ' + d.entries.length + '種目 ・ ' + setCount(d) + 'セット</span>' +
+            '</div><div class="hbody">';
+    d.entries.forEach(function(en){
+      var top = 0, reps = 0;
+      (en.sets||[]).forEach(function(s){ if (s.w > 0 && s.r > 0 && s.w >= top){ top = s.w; reps = s.r; } });
+      var n = (en.sets||[]).filter(function(s){ return s.w > 0 && s.r > 0; }).length;
+      h += '<div class="hex"><span class="n">' +
+           '<i style="display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:6px;' +
+           'background:var(--cat' + catOf(en.name) + ')"></i>' + esc(en.name) + '</span><span class="s">' +
+           (top ? fmt(top) + 'kg × ' + reps + ' ／ ' + n + 'セット' : '—') + '</span></div>';
+    });
+    if (d.memo) h += '<div class="hmemo">' + esc(d.memo) + '</div>';
+    h += '<button class="hopen" data-act="openday" data-k="' + k + '">この日を編集</button>';
+    return h + '</div></article>';
+  }
+
+  function viewHistoryList(keys){
     var total = 0, totalSets = 0;
     keys.forEach(function(k){ total += volOf(state.days[k]); totalSets += setCount(state.days[k]); });
 
@@ -1662,6 +1816,18 @@
       }
       if (act === "toggleday"){ state.openDays[b.dataset.k] = !state.openDays[b.dataset.k]; render(); return; }
       if (act === "openday"){ state.date = b.dataset.k; state.view = "record"; render(); return; }
+      if (act === "histmode"){ state.histMode = b.dataset.v; render(); return; }
+      if (act === "calmove"){
+        state.calMonth = shiftMonth(state.calMonth, +b.dataset.v);
+        state.selDay = null;
+        render();
+        return;
+      }
+      if (act === "selday"){
+        state.selDay = (state.selDay === b.dataset.k) ? null : b.dataset.k;
+        render();
+        return;
+      }
       if (act === "csv"){
         saveFile("gymlog_" + keyOf(new Date()) + ".csv", buildCsv(), "text/csv;charset=utf-8", "CSV を書き出しました");
         return;

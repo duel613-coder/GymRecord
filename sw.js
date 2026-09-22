@@ -1,7 +1,7 @@
 /* ジムログ Service Worker
    アプリを更新したら CACHE の番号を上げてください（例: gymlog-v1 → gymlog-v2）。
    端末側で「新しいバージョンがあります」と表示され、更新を押すと差し替わります。 */
-const CACHE = "gymlog-v5";
+const CACHE = "gymlog-v6";
 
 const ASSETS = [
   "./",
