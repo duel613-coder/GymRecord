@@ -352,7 +352,8 @@
   var state = {
     days: {}, exercises: [], exInit: false, genres: [], genresInit: false, lastBackup: 0, savedAt: 0,
     view: "record", date: keyOf(new Date()), chartEx: null, openDays: {},
-    sheetEdit: false, sheetMode: "pick", editGenre: -1, lastCat: "その他", exOpen: false
+    sheetEdit: false, sheetMode: "pick", editGenre: -1, lastCat: "その他", exOpen: false,
+    dbxOpen: null   // null = 未接続なら開く / 接続済みなら畳む
   };
   var idb = null, saveTimer = null, saving = false, localFail = false;
   // Dropbox（設定・トークンは端末内にのみ保存し、コードには一切含めない）
@@ -737,6 +738,7 @@
       dbxToken.access = d.access_token || "";
       dbxToken.exp = Date.now() + ((d.expires_in || 14400) - 300) * 1000;
       dbxState = "idle"; dbxErr = "";
+      state.dbxOpen = null;          // 接続できたら畳んだ状態に戻す
       dbxSave(); render(); updateStatus();
       toast("Dropbox に接続しました");
       dbxSync(true);
@@ -832,6 +834,7 @@
     dbx.refreshToken = ""; dbx.verifier = ""; dbx.lastSync = 0; dbx.syncedAt = 0; dbx.lastDated = "";
     dbxToken = { access:"", exp:0 };
     dbxState = "idle"; dbxErr = "";
+    state.dbxOpen = null;
     dbxSave(); render(); updateStatus();
     toast("接続を解除しました");
   }
@@ -1163,7 +1166,25 @@
     return (d.getMonth()+1) + "/" + d.getDate() + " " + hhmm;
   }
   function viewDropbox(){
+    var connected = dbxOn();
+    // 未接続なら開いた状態、接続済みなら畳んだ状態で始める（誤操作の防止）
+    var open = state.dbxOpen === null ? !connected : state.dbxOpen;
+
     var h = '<div class="sec"><div class="sechd"><span class="lbl">Dropbox 自動バックアップ</span></div>';
+
+    // 畳んでいても状態と手動同期だけは触れるようにしておく
+    var head = connected
+      ? (dbxState === "syncing" ? "同期中"
+         : dbxState === "error" ? "エラー：" + esc(dbxErr)
+         : dbxDirty() ? "未同期の変更があります" : "最新の状態です")
+      : (dbx.appKey ? "認証が未完了です" : "まだ設定されていません");
+    h += '<div class="row stack"><span class="t">' + (connected ? "接続済み" : "未接続") +
+         '<small>' + head + (connected ? "　最終同期 " + whenTxt(dbx.lastSync) : "") + '</small></span>' +
+         (connected ? '<button class="btn" data-act="dbxsync">今すぐ同期</button>' : '') +
+         '<button class="btn' + (open ? "" : " pri") + '" data-act="dbxopen">' +
+         (open ? "閉じる" : "設定を開く") + '</button></div>';
+
+    if (!open) return h + '</div>';
 
     if (!dbx.appKey){
       h += '<div class="row"><span class="t">まだ設定されていません' +
@@ -1184,15 +1205,10 @@
            '<button class="btn pri" data-act="dbxconnect">接続</button></div>';
     }
 
-    if (dbxOn()){
-      var st = dbxState === "syncing" ? "同期中"
-             : dbxState === "error" ? "エラー：" + esc(dbxErr)
-             : dbxDirty() ? "未同期の変更があります" : "最新の状態です";
-      h += '<div class="row"><span class="t">接続済み<small>' + st + '</small></span>' +
-           '<button class="btn" data-act="dbxsync">今すぐ同期</button></div>' +
-           '<div class="row"><span class="t">最終同期<small>' + whenTxt(dbx.lastSync) +
-           '　保存先：アプリ／' + esc("ジムログ") + '／gymlog-backup.json</small></span></div>' +
-           '<div class="row"><span class="t">自動で同期<small>記録を変えた数秒後と、アプリを開いたときに送ります</small></span>' +
+    if (connected){
+      h += '<div class="row"><span class="t">保存先<small>アプリ／' + esc("ジムログ") +
+           '／gymlog-backup.json</small></span></div>' +
+           '<div class="row"><span class="t">自動で同期<small>最後の操作から15秒たったときと、アプリを開いたときに送ります</small></span>' +
            '<span class="seg"><button data-act="dbxauto" data-v="1" aria-pressed="' + (dbx.auto === true) + '">する</button>' +
            '<button data-act="dbxauto" data-v="0" aria-pressed="' + (dbx.auto === false) + '">しない</button></span></div>' +
            '<div class="row"><span class="t">接続を解除<small>端末内のトークンを消します。Dropbox 上のファイルは残ります。</small></span>' +
@@ -1683,6 +1699,12 @@
       if (act === "dbxconnect"){
         var ci = document.getElementById("dbxCode");
         dbxConnect(ci ? ci.value : "");
+        return;
+      }
+      if (act === "dbxopen"){
+        var cur = state.dbxOpen === null ? !dbxOn() : state.dbxOpen;
+        state.dbxOpen = !cur;
+        render();
         return;
       }
       if (act === "dbxsync"){ dbxSync(true); return; }
