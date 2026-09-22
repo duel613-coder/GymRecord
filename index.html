@@ -228,10 +228,30 @@
         font-size:13.5px; font-weight:500; line-height:1.3}
   .chip:active,.chip.used{background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent)}
   .chip.used{font-weight:700}
+  .chip.mine::before{content:""; display:inline-block; width:5px; height:5px; border-radius:50%;
+                     background:var(--accent-line); margin-right:6px; vertical-align:middle}
+  span.chip.edit{display:inline-flex; align-items:center; gap:7px; padding:5px 5px 5px 12px}
+  .chipx{width:24px; height:24px; flex:none; border:0; border-radius:50%; background:var(--red); color:#fff;
+         font-size:11px; line-height:1; display:grid; place-items:center}
+  .hint{margin:0; font-size:12.5px; line-height:1.6; color:var(--ink-2); background:var(--surface-2);
+        border-radius:10px; padding:9px 11px}
   .freeadd{display:flex; gap:8px}
   .freeadd input{flex:1; min-width:0; border:1px solid var(--line-strong); background:var(--surface);
                  border-radius:10px; padding:10px 12px; outline:none}
   .freeadd input:focus{border-color:var(--accent)}
+  .freeadd select{flex:none; border:1px solid var(--line-strong); background:var(--surface); color:var(--ink);
+                  border-radius:10px; padding:10px 5px; outline:none; font-size:15px; font-weight:700}
+  .catsel{flex:none; border:1px solid var(--line-strong); background:var(--surface); color:var(--ink);
+          border-radius:9px; padding:7px 4px; font-size:12.5px; font-weight:700; outline:none}
+  .chip.genre{display:inline-flex; align-items:center; gap:7px; font-weight:700;
+              border-color:var(--accent-line); background:var(--accent-soft); color:var(--accent)}
+  .chip.genre .gn{font-size:11px; font-weight:800; font-variant-numeric:tabular-nums; opacity:.75;
+                  border-left:1px solid var(--accent-line); padding-left:7px}
+  .chip.on{background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700}
+  .chip.on.mine::before{background:var(--accent-ink); opacity:.55}
+  .inline{width:100%; border:1px solid var(--line-strong); background:var(--surface); color:var(--ink);
+          border-radius:9px; padding:8px 10px; outline:none; font-size:15px}
+  .inline:focus{border-color:var(--accent)}
 
   .toast{position:fixed; left:50%; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%);
          background:var(--ink); color:var(--bg); padding:9px 15px; border-radius:20px; font-size:13px;
@@ -286,7 +306,7 @@
 
 <div class="scrim" id="scrim" hidden></div>
 <div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-label="種目を追加">
-  <div class="shhd"><h2>種目を追加</h2><button class="btn" id="sheetClose">閉じる</button></div>
+  <div class="shhd"><h2 id="sheetTitle">種目を追加</h2><button class="btn" id="sheetEdit" hidden>編集</button><button class="btn" id="sheetClose">閉じる</button></div>
   <div class="shbody" id="shbody"></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -298,7 +318,9 @@
   "use strict";
 
   /* ===================== 定数 ===================== */
-  var PRESETS = [
+  // 初回起動時にデータとして書き込む「たね」。以降はこの配列を参照せず、
+  // 種目はすべて state.exercises（保存データ側）だけで管理する。
+  var SEED_EXERCISES = [
     ["胸", ["ベンチプレス","インクラインベンチプレス","ダンベルプレス","チェストプレス","ペックフライ","ケーブルクロスオーバー"]],
     ["背中", ["ラットプルダウン","シーテッドロー","デッドリフト","ベントオーバーロー","チンニング","ワンハンドロー"]],
     ["脚", ["スクワット","レッグプレス","レッグエクステンション","レッグカール","ヒップスラスト","カーフレイズ"]],
@@ -306,14 +328,24 @@
     ["腕", ["アームカール","インクラインカール","ハンマーカール","ケーブルプレスダウン","フレンチプレス","ディップス"]],
     ["体幹", ["アブドミナルクランチ","トーソローテーション","レッグレイズ","プランク","バックエクステンション"]]
   ];
+  var CATS = ["胸","背中","脚","肩","腕","体幹","その他"];
+  // ジャンル＝その日のメニュー構成。初回だけ用意し、以降は利用者が自由に編集する
+  var DEFAULT_GENRES = [
+    ["胸の日", ["ベンチプレス","インクラインベンチプレス","チェストプレス","ペックフライ"]],
+    ["背中の日", ["ラットプルダウン","シーテッドロー","ベントオーバーロー"]],
+    ["脚の日", ["スクワット","レッグプレス","レッグエクステンション","レッグカール","カーフレイズ"]],
+    ["肩の日", ["ショルダープレス","サイドレイズ","リアレイズ","シュラッグ"]],
+    ["腕の日", ["アームカール","ハンマーカール","ケーブルプレスダウン","フレンチプレス"]]
+  ];
   var WD = ["日","月","火","水","木","金","土"];
   var LS_KEY = "gymlog.state.v1", LS_THEME = "gymlog.theme";
   var DB_NAME = "gymlog", DB_STORE = "kv", DB_KEY = "state";
 
   /* ===================== 状態 ===================== */
   var state = {
-    days: {}, custom: [], lastBackup: 0, savedAt: 0,
-    view: "record", date: keyOf(new Date()), chartEx: null, openDays: {}
+    days: {}, exercises: [], exInit: false, genres: [], genresInit: false, lastBackup: 0, savedAt: 0,
+    view: "record", date: keyOf(new Date()), chartEx: null, openDays: {},
+    sheetEdit: false, sheetMode: "pick", editGenre: -1, lastCat: "その他", exOpen: false
   };
   var idb = null, saveTimer = null;
 
@@ -373,9 +405,127 @@
     return w > best && prior.length > 0;
   }
 
+  /* ===================== 種目（すべて保存データ側で管理） ===================== */
+  function seedList(){
+    var out = [];
+    SEED_EXERCISES.forEach(function(g){
+      g[1].forEach(function(n){ out.push({ name: n, cat: g[0] }); });
+    });
+    return out;
+  }
+  // 文字列の配列（旧形式）も {name, cat} も受け取り、重複を除いて正規化する
+  function normEx(list){
+    var out = [], seen = {};
+    (list || []).forEach(function(x){
+      var name = null, cat = null;
+      if (typeof x === "string") name = x;
+      else if (x && typeof x === "object"){ name = x.name; cat = x.cat; }
+      if (typeof name !== "string") return;
+      name = name.trim();
+      if (!name || seen[name]) return;
+      seen[name] = 1;
+      out.push({ name: name, cat: CATS.indexOf(cat) >= 0 ? cat : "その他" });
+    });
+    return out;
+  }
+  function findEx(name){
+    for (var i = 0; i < state.exercises.length; i++)
+      if (state.exercises[i].name === name) return i;
+    return -1;
+  }
+  function exIn(cat){
+    return state.exercises.filter(function(c){ return c.cat === cat; });
+  }
+  function knownNames(){
+    return state.exercises.map(function(c){ return c.name; });
+  }
+  function usesOf(name){
+    var n = 0;
+    Object.keys(state.days).forEach(function(k){
+      if ((state.days[k].entries||[]).some(function(e){ return e.name === name; })) n++;
+    });
+    return n;
+  }
+  function seedExercises(){
+    if (state.exInit || state.exercises.length) return false;
+    state.exercises = seedList();
+    state.exInit = true;
+    return true;
+  }
+  function restoreSeed(){
+    var added = 0;
+    seedList().forEach(function(c){
+      if (findEx(c.name) < 0){ state.exercises.push(c); added++; }
+    });
+    state.exInit = true;
+    persist(); render();
+    toast(added ? added + " 種目を戻しました" : "不足している種目はありません");
+  }
+  function removeExercise(name, after){
+    var i = findEx(name);
+    if (i < 0) return;
+    var n = usesOf(name);
+    if (n > 0 && !window.confirm(
+        name + " を一覧から削除します。\n過去 " + n + " 日ぶんの記録はそのまま残ります。\nよろしいですか？")) return;
+    state.exercises.splice(i, 1);
+    persist();
+    if (after) after();
+    render();
+    toast(name + " を一覧から削除しました");
+  }
+
+  /* ===================== ジャンル ===================== */
+  function normGenres(list){
+    var out = [], seen = {};
+    (list || []).forEach(function(g){
+      if (!g || typeof g !== "object") return;
+      var name = typeof g.name === "string" ? g.name.trim() : "";
+      if (!name || seen[name]) return;
+      seen[name] = 1;
+      var items = [], got = {};
+      (Array.isArray(g.items) ? g.items : []).forEach(function(n){
+        if (typeof n === "string" && n.trim() && !got[n]){ got[n] = 1; items.push(n); }
+      });
+      out.push({ name: name, items: items });
+    });
+    return out;
+  }
+  function findGenre(name){
+    for (var i = 0; i < state.genres.length; i++)
+      if (state.genres[i].name === name) return i;
+    return -1;
+  }
+  function seedGenres(){
+    if (state.genresInit || state.genres.length) return false;
+    state.genres = DEFAULT_GENRES.map(function(g){ return { name: g[0], items: g[1].slice() }; });
+    state.genresInit = true;
+    return true;
+  }
+  // 当日のシートにすでにあるか
+  function hasToday(name){
+    var day = dayOf(state.date);
+    return !!(day && (day.entries || []).some(function(e){ return e.name === name; }));
+  }
+  function applyGenre(gi){
+    var g = state.genres[gi];
+    if (!g) return;
+    if (!g.items.length){ toast("「" + g.name + "」に種目が登録されていません"); return; }
+    var added = 0, skipped = 0;
+    g.items.forEach(function(n){
+      if (addExercise(n, null, true)) added++; else skipped++;
+    });
+    touch(state.date);
+    closeSheet();
+    render();
+    if (!added) toast("「" + g.name + "」の種目はすべて追加済みです");
+    else toast("「" + g.name + "」から " + added + " 種目を追加" + (skipped ? "（" + skipped + " 件は追加済み）" : ""));
+  }
+
   /* ===================== 保存：localStorage + IndexedDB ===================== */
   function snapshot(){
-    return { days: state.days, custom: state.custom, lastBackup: state.lastBackup, savedAt: Date.now(), version: 1 };
+    return { days: state.days, exercises: state.exercises, exInit: state.exInit,
+             genres: state.genres, genresInit: state.genresInit,
+             lastBackup: state.lastBackup, savedAt: Date.now(), version: 2 };
   }
   function openIdb(){
     return new Promise(function(resolve){
@@ -432,7 +582,18 @@
   function adopt(obj){
     if (!obj || typeof obj !== "object") return;
     if (obj.days && typeof obj.days === "object") state.days = obj.days;
-    if (Array.isArray(obj.custom)) state.custom = obj.custom;
+    if (Array.isArray(obj.exercises)){
+      state.exercises = normEx(obj.exercises);
+      state.exInit = !!obj.exInit;
+    } else if (Array.isArray(obj.custom) || Array.isArray(obj.hidden)){
+      // 旧形式：コード側のプリセット − 非表示 ＋ 自分で追加した種目 を、そのままデータへ移す
+      var hid = Array.isArray(obj.hidden) ? obj.hidden : [];
+      var merged = seedList().filter(function(c){ return hid.indexOf(c.name) < 0; });
+      state.exercises = normEx(merged.concat(normEx(obj.custom)));
+      state.exInit = true;
+    }
+    if (Array.isArray(obj.genres)) state.genres = normGenres(obj.genres);
+    state.genresInit = !!obj.genresInit;
     state.lastBackup = obj.lastBackup || 0;
     state.savedAt = obj.savedAt || 0;
   }
@@ -448,8 +609,10 @@
     if (fromLs && fromDb) pick = (fromDb.savedAt||0) >= (fromLs.savedAt||0) ? fromDb : fromLs;
     else pick = fromDb || fromLs;
     adopt(pick);
+    var seeded = seedExercises();
+    if (seedGenres()) seeded = true;
     // 片方が欠けていれば補う
-    if (pick && (!fromDb || !fromLs)) persist();
+    if (seeded || (pick && (!fromDb || !fromLs))) persist();
   }
 
   function setSync(cls, txt){
@@ -722,13 +885,48 @@
         '<button data-act="theme" data-v="dark" aria-pressed="' + (theme==="dark") + '">ダーク</button>' +
       '</span></div></div>';
 
+    h += '<div class="sec"><div class="sechd"><span class="lbl">ジャンル（まとめて追加）</span></div>';
+    if (!state.genres.length){
+      h += '<div class="row"><span class="t">まだありません<small>「腕の日」のようにメニュー構成を登録しておけます</small></span></div>';
+    } else {
+      state.genres.forEach(function(g, i){
+        h += '<div class="row"><span class="t">' + esc(g.name) + '<small>' + g.items.length + ' 種目</small></span>' +
+             '<button class="btn" data-act="editgenre" data-i="' + i + '">編集</button>' +
+             '<button class="btn dan" data-act="delgenre" data-i="' + i + '">削除</button></div>';
+      });
+    }
+    h += '<div class="row"><span class="t"><input id="newGenre" class="inline" placeholder="ジャンル名（例：腕の日）" aria-label="ジャンル名"></span>' +
+         '<button class="btn pri" data-act="addgenre">追加</button></div></div>';
+
     h += '<div class="sec"><div class="sechd"><span class="lbl">種目</span></div>' +
-      '<div class="row"><span class="t">自分で追加した種目<small>' +
-        (state.custom.length ? esc(state.custom.join("、")) : "まだありません") + '</small></span>' +
-        (state.custom.length ? '<button class="btn dan" data-act="clearcustom">消去</button>' : '') + '</div></div>';
+         '<div class="row"><span class="t">登録されている種目<small>' + state.exercises.length +
+         ' 種目・すべて編集できます</small></span>' +
+         '<button class="btn" data-act="toggleexlist">' + (state.exOpen ? "閉じる" : "一覧") + '</button></div>';
+    if (state.exOpen){
+      if (!state.exercises.length){
+        h += '<div class="row"><span class="t">1つもありません' +
+             '<small>下の「初期の種目を戻す」か、記録タブの「＋ 種目を追加」から登録できます</small></span></div>';
+      } else {
+        state.exercises.slice().sort(function(a, b){
+          return (CATS.indexOf(a.cat) - CATS.indexOf(b.cat)) || a.name.localeCompare(b.name, "ja");
+        }).forEach(function(c){
+          var n = usesOf(c.name);
+          h += '<div class="row"><span class="t">' + esc(c.name) +
+               '<small>' + (n ? n + " 日ぶんの記録あり" : "まだ記録なし") + '</small></span>' +
+               '<select class="catsel" data-act="setcat" data-n="' + esc(c.name) + '" aria-label="' + esc(c.name) + ' のカテゴリ">' +
+                 CATS.map(function(x){
+                   return '<option value="' + x + '"' + (x === c.cat ? " selected" : "") + '>' + x + '</option>';
+                 }).join("") +
+               '</select><button class="btn dan" data-act="delcustom" data-n="' + esc(c.name) + '">削除</button></div>';
+        });
+      }
+    }
+    h += '<div class="row"><span class="t" style="font-size:12px;font-weight:400;color:var(--ink-3)">' +
+         '削除しても過去の記録は残ります。一覧から選べなくなるだけです。</span>' +
+         '<button class="btn" data-act="restoreseed">初期の種目を戻す</button></div></div>';
 
     h += '<div class="sec"><div class="sechd"><span class="lbl">この端末のデータ</span></div>' +
-      '<div class="row"><span class="t">すべての記録を削除<small>取り消せません。先にバックアップを。</small></span>' +
+      '<div class="row"><span class="t">すべての記録を削除<small>取り消せません。種目とジャンルの設定は残ります。</small></span>' +
       '<button class="btn dan" data-act="wipe">削除</button></div></div>';
 
     h += '<p class="note">記録はこの端末の中（localStorage と IndexedDB の両方）に保存され、外部には一切送信されません。' +
@@ -831,45 +1029,176 @@
     var day = dayOf(state.date), used = {};
     if (day) day.entries.forEach(function(e){ used[e.name] = 1; });
 
-    var h = '<div class="freeadd"><input id="freeEx" placeholder="種目名を入力して追加" aria-label="種目名">' +
-            '<button class="btn pri" data-act="freeadd">追加</button></div>';
-    var cust = state.custom.filter(function(n){
-      return !PRESETS.some(function(p){ return p[1].indexOf(n) >= 0; }); });
-    if (cust.length){
-      h += '<div class="cat"><span class="lbl">自分の種目</span><div class="chips">';
-      cust.forEach(function(n){
-        h += '<button class="chip' + (used[n] ? " used" : "") + '" data-act="pick" data-n="' + esc(n) + '">' + esc(n) + '</button>'; });
+    if (state.sheetMode === "genre") return openGenreSheet();
+
+    var editing = state.sheetEdit, h = "";
+
+    if (state.genres.length && !editing){
+      h += '<div class="cat"><span class="lbl">ジャンル（まとめて追加）</span><div class="chips">';
+      state.genres.forEach(function(g, i){
+        h += '<button class="chip genre" data-act="usegenre" data-i="' + i + '">' +
+             esc(g.name) + '<span class="gn">' + g.items.length + '</span></button>';
+      });
       h += '</div></div>';
     }
-    PRESETS.forEach(function(p){
-      h += '<div class="cat"><span class="lbl">' + p[0] + '</span><div class="chips">';
-      p[1].forEach(function(n){
-        h += '<button class="chip' + (used[n] ? " used" : "") + '" data-act="pick" data-n="' + esc(n) + '">' + esc(n) + '</button>'; });
+
+    if (editing){
+      h += '<p class="hint">✕ を押すと一覧から外します。過去の記録は残ります。' +
+           'もともと入っている種目は「非表示」になるだけで、設定画面からいつでも戻せます。</p>';
+    } else {
+      h += '<div class="freeadd"><input id="freeEx" placeholder="種目名を入力して追加" aria-label="種目名">' +
+           '<select id="freeCat" aria-label="カテゴリ">' +
+             CATS.map(function(c){
+               return '<option value="' + c + '"' + (c === state.lastCat ? " selected" : "") + '>' + c + '</option>';
+             }).join("") +
+           '</select><button class="btn pri" data-act="freeadd">追加</button></div>';
+    }
+
+    CATS.forEach(function(cat){
+      var list = exIn(cat);
+      if (!list.length) return;
+      h += '<div class="cat"><span class="lbl">' + cat + '</span><div class="chips">';
+      list.forEach(function(c){ h += chipFor(c.name, editing, used); });
       h += '</div></div>';
     });
     document.getElementById("shbody").innerHTML = h;
+    document.getElementById("sheetTitle").textContent = "種目を追加";
+    document.getElementById("sheetClose").textContent = "閉じる";
 
+    var eb = document.getElementById("sheetEdit");
+    eb.hidden = false;
+    eb.textContent = editing ? "完了" : "編集";
+    showSheet();
+  }
+
+  function chipFor(name, editing, used){
+    if (editing){
+      return '<span class="chip edit">' + esc(name) +
+             '<button class="chipx" data-act="rmex" data-n="' + esc(name) +
+             '" aria-label="' + esc(name) + ' を一覧から削除">✕</button></span>';
+    }
+    return '<button class="chip' + (used[name] ? " used" : "") +
+           '" data-act="pick" data-n="' + esc(name) + '">' + esc(name) + '</button>';
+  }
+
+  /* ジャンルに入れる種目を選ぶモード */
+  function openGenreSheet(){
+    var g = state.genres[state.editGenre];
+    if (!g){ state.sheetMode = "pick"; return openSheet(); }
+    var inG = {};
+    g.items.forEach(function(n){ inG[n] = 1; });
+
+    var h = '<p class="hint">タップして「' + esc(g.name) + '」に入れる種目を選びます。' +
+            '色が付いているものが登録済みです。</p>';
+    h += '<div class="freeadd">' +
+         '<button class="btn" data-act="rengenre" data-i="' + state.editGenre + '">名前を変更</button>' +
+         '<button class="btn dan" data-act="delgenre" data-i="' + state.editGenre + '">このジャンルを削除</button></div>';
+
+    CATS.forEach(function(cat){
+      var list = exIn(cat);
+      if (!list.length) return;
+      h += '<div class="cat"><span class="lbl">' + cat + '</span><div class="chips">';
+      list.forEach(function(c){
+        h += '<button class="chip' + (inG[c.name] ? " on" : "") + '" data-act="toggleitem" data-n="' + esc(c.name) +
+             '" aria-pressed="' + !!inG[c.name] + '">' + esc(c.name) + '</button>';
+      });
+      h += '</div></div>';
+    });
+
+    // 種目一覧から消えた名前も外せるようにしておく
+    var known = knownNames(), orphans = g.items.filter(function(n){ return known.indexOf(n) < 0; });
+    if (orphans.length){
+      h += '<div class="cat"><span class="lbl">一覧にない種目</span><div class="chips">';
+      orphans.forEach(function(n){
+        h += '<button class="chip on" data-act="toggleitem" data-n="' + esc(n) + '" aria-pressed="true">' + esc(n) + '</button>';
+      });
+      h += '</div></div>';
+    }
+
+    document.getElementById("shbody").innerHTML = h;
+    document.getElementById("sheetTitle").textContent = esc(g.name);
+    document.getElementById("sheetEdit").hidden = true;
+    document.getElementById("sheetClose").textContent = "完了";
+    showSheet();
+  }
+
+  function showSheet(){
     var sc = document.getElementById("scrim"), sh = document.getElementById("sheet");
     sc.hidden = false; sh.hidden = false;
     requestAnimationFrame(function(){ sc.classList.add("show"); sh.classList.add("show"); });
   }
   function closeSheet(){
     var sc = document.getElementById("scrim"), sh = document.getElementById("sheet");
+    state.sheetEdit = false; state.sheetMode = "pick"; state.editGenre = -1;
     sc.classList.remove("show"); sh.classList.remove("show");
     setTimeout(function(){ sc.hidden = true; sh.hidden = true; }, 200);
   }
-  function addExercise(name){
+  // quiet = まとめて追加するときの一括モード（個別のトーストや画面更新を行わない）
+  function addExercise(name, cat, quiet){
     name = (name || "").trim();
-    if (!name) return;
+    if (!name) return false;
+    if (hasToday(name)){
+      if (!quiet) toast("「" + name + "」は今日すでに追加されています");
+      return false;
+    }
     var day = ensureDay(state.date), last = lastTime(name, state.date);
     var seed = last && last.top ? { w: last.top.w, r: last.top.r } : { w: 0, r: 0 };
     day.entries.push({ name: name, sets: [ { w: seed.w, r: seed.r } ] });
-    if (!PRESETS.some(function(p){ return p[1].indexOf(name) >= 0; }) && state.custom.indexOf(name) < 0)
-      state.custom.push(name);
+    if (findEx(name) < 0){
+      var c = CATS.indexOf(cat) >= 0 ? cat : "その他";
+      state.exercises.push({ name: name, cat: c });
+      if (cat) state.lastCat = c;
+    }
+    if (quiet) return true;
     touch(state.date);
     closeSheet();
     render();
     toast(last ? name + " を追加（前回の重量を反映）" : name + " を追加");
+    return true;
+  }
+
+  /* ===================== ジャンルの編集 ===================== */
+  function editGenre(i){
+    if (!state.genres[i]) return;
+    state.editGenre = i;
+    state.sheetMode = "genre";
+    openGenreSheet();
+  }
+  function createGenre(name){
+    name = (name || "").trim();
+    if (!name) return;
+    if (findGenre(name) >= 0){ toast("「" + name + "」はすでにあります"); return; }
+    state.genres.push({ name: name, items: [] });
+    state.genresInit = true;
+    persist();
+    render();
+    editGenre(state.genres.length - 1);
+  }
+  function renameGenre(i){
+    var g = state.genres[i];
+    if (!g) return;
+    var v = null;
+    try{ v = window.prompt("ジャンル名を変更します", g.name); }catch(e){ v = null; }
+    if (v === null) return;
+    v = v.trim();
+    if (!v) return;
+    var dup = findGenre(v);
+    if (dup >= 0 && dup !== i){ toast("「" + v + "」はすでにあります"); return; }
+    g.name = v;
+    persist();
+    render();
+    if (state.sheetMode === "genre") openGenreSheet();
+    toast("ジャンル名を変更しました");
+  }
+  function deleteGenre(i){
+    var g = state.genres[i];
+    if (!g) return;
+    if (!window.confirm("ジャンル「" + g.name + "」を削除します。\n記録した内容には影響しません。\nよろしいですか？")) return;
+    state.genres.splice(i, 1);
+    persist();
+    if (state.sheetMode === "genre") closeSheet();
+    render();
+    toast("「" + g.name + "」を削除しました");
   }
 
   /* ===================== 書き出し・読み込み ===================== */
@@ -929,8 +1258,16 @@
       if (!r || !Array.isArray(r.entries)) return;
       if (!l || (r.updatedAt||0) > (l.updatedAt||0)){ state.days[k] = r; n++; }
     });
-    if (obj && Array.isArray(obj.custom))
-      obj.custom.forEach(function(x){ if (state.custom.indexOf(x) < 0) state.custom.push(x); });
+    var exIn2 = (obj && Array.isArray(obj.exercises)) ? obj.exercises
+              : (obj && Array.isArray(obj.custom)) ? obj.custom : null;
+    if (exIn2){
+      normEx(exIn2).forEach(function(c){ if (findEx(c.name) < 0) state.exercises.push(c); });
+      state.exInit = true;
+    }
+    if (obj && Array.isArray(obj.genres)){
+      normGenres(obj.genres).forEach(function(g){ if (findGenre(g.name) < 0) state.genres.push(g); });
+      state.genresInit = true;
+    }
     return n;
   }
 
@@ -950,14 +1287,38 @@
   document.getElementById("sheetClose").addEventListener("click", closeSheet);
   document.getElementById("scrim").addEventListener("click", closeSheet);
 
+  document.getElementById("sheetEdit").addEventListener("click", function(){
+    state.sheetEdit = !state.sheetEdit;
+    openSheet();
+  });
+  function freeCat(){
+    var s = document.getElementById("freeCat");
+    return s ? s.value : "その他";
+  }
   document.getElementById("shbody").addEventListener("click", function(ev){
     var b = ev.target.closest("button[data-act]");
     if (!b) return;
-    if (b.dataset.act === "pick") addExercise(b.dataset.n);
-    if (b.dataset.act === "freeadd") addExercise(document.getElementById("freeEx").value);
+    var act = b.dataset.act;
+    if (act === "pick") addExercise(b.dataset.n);
+    else if (act === "freeadd") addExercise(document.getElementById("freeEx").value, freeCat());
+    else if (act === "rmex") removeExercise(b.dataset.n, openSheet);
+    else if (act === "usegenre") applyGenre(+b.dataset.i);
+    else if (act === "rengenre") renameGenre(+b.dataset.i);
+    else if (act === "delgenre") deleteGenre(+b.dataset.i);
+    else if (act === "toggleitem"){
+      var g = state.genres[state.editGenre];
+      if (!g) return;
+      var n = b.dataset.n, i = g.items.indexOf(n);
+      if (i >= 0){ g.items.splice(i, 1); b.classList.remove("on"); b.setAttribute("aria-pressed","false"); }
+      else { g.items.push(n); b.classList.add("on"); b.setAttribute("aria-pressed","true"); }
+      persist();
+    }
   });
   document.getElementById("shbody").addEventListener("keydown", function(ev){
-    if (ev.key === "Enter" && ev.target.id === "freeEx"){ ev.preventDefault(); addExercise(ev.target.value); }
+    if (ev.key === "Enter" && ev.target.id === "freeEx"){
+      ev.preventDefault();
+      addExercise(ev.target.value, freeCat());
+    }
   });
 
   document.getElementById("fileIn").addEventListener("change", function(ev){
@@ -1018,8 +1379,9 @@
         return;
       }
       if (act === "json"){
-        var payload = JSON.stringify({ app:"gymlog", version:1, exported:new Date().toISOString(),
-                                       days:state.days, custom:state.custom }, null, 2);
+        var payload = JSON.stringify({ app:"gymlog", version:2, exported:new Date().toISOString(),
+                                       days:state.days, exercises:state.exercises,
+                                       genres:state.genres }, null, 2);
         saveFile("gymlog_backup_" + keyOf(new Date()) + ".json", payload, "application/json",
                  "バックアップを書き出しました").then(function(ok){
           if (ok){ state.lastBackup = Date.now(); persist(); render(); }
@@ -1028,11 +1390,21 @@
       }
       if (act === "import"){ document.getElementById("fileIn").click(); return; }
       if (act === "theme"){ applyTheme(b.dataset.v); render(); return; }
-      if (act === "clearcustom"){ state.custom = []; persist(); render(); toast("自分の種目を消去しました"); return; }
+      if (act === "delcustom"){ removeExercise(b.dataset.n); return; }
+      if (act === "toggleexlist"){ state.exOpen = !state.exOpen; render(); return; }
+      if (act === "restoreseed"){ restoreSeed(); return; }
+      if (act === "setcat") return;   // change イベントで処理
+      if (act === "editgenre"){ editGenre(+b.dataset.i); return; }
+      if (act === "delgenre"){ deleteGenre(+b.dataset.i); return; }
+      if (act === "addgenre"){
+        var gi = document.getElementById("newGenre");
+        createGenre(gi ? gi.value : "");
+        return;
+      }
       if (act === "wipe"){
         if (!window.confirm("すべての記録を削除します。取り消せません。続けますか？")) return;
         if (!window.confirm("本当に削除しますか？バックアップは取ってありますか？")) return;
-        state.days = {}; state.custom = []; state.lastBackup = 0; state.openDays = {};
+        state.days = {}; state.custom = []; state.hidden = []; state.lastBackup = 0; state.openDays = {};
         persist(); render(); toast("すべての記録を削除しました"); return;
       }
     }
@@ -1050,6 +1422,25 @@
       if (t.classList.contains("r")) val = Math.round(val);
       commitSet(+card.dataset.e, +row.dataset.s, t.classList.contains("w") ? "w" : "r", val);
     }
+  });
+
+  stackEl.addEventListener("keydown", function(ev){
+    if (ev.key === "Enter" && ev.target.id === "newGenre"){
+      ev.preventDefault();
+      createGenre(ev.target.value);
+    }
+  });
+
+  stackEl.addEventListener("change", function(ev){
+    var t = ev.target;
+    if (!t.classList || !t.classList.contains("catsel")) return;
+    var i = findEx(t.dataset.n);
+    if (i < 0) return;
+    state.exercises[i].cat = t.value;
+    state.lastCat = t.value;
+    persist();
+    render();
+    toast(t.dataset.n + " を「" + t.value + "」に移動しました");
   });
 
   function commitSet(ei, si, field, val){
