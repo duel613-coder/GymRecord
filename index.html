@@ -202,6 +202,9 @@
   .seg button{border:0; background:var(--surface); padding:8px 11px; font-size:12px; font-weight:700; color:var(--ink-3)}
   .seg button[aria-pressed="true"]{background:var(--accent-soft); color:var(--accent)}
   .note{font-size:12px; color:var(--ink-3); line-height:1.65; padding:0 4px}
+  .row a{color:var(--accent); text-underline-offset:2px}
+  .row code{background:var(--surface-2); padding:1px 5px; border-radius:4px; font-size:11px;
+            font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .warn{background:var(--gold-soft); color:var(--gold); border-radius:var(--radius); padding:10px 12px;
         font-size:12.5px; font-weight:600; line-height:1.55}
 
@@ -228,8 +231,6 @@
         font-size:13.5px; font-weight:500; line-height:1.3}
   .chip:active,.chip.used{background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent)}
   .chip.used{font-weight:700}
-  .chip.mine::before{content:""; display:inline-block; width:5px; height:5px; border-radius:50%;
-                     background:var(--accent-line); margin-right:6px; vertical-align:middle}
   span.chip.edit{display:inline-flex; align-items:center; gap:7px; padding:5px 5px 5px 12px}
   .chipx{width:24px; height:24px; flex:none; border:0; border-radius:50%; background:var(--red); color:#fff;
          font-size:11px; line-height:1; display:grid; place-items:center}
@@ -248,7 +249,6 @@
   .chip.genre .gn{font-size:11px; font-weight:800; font-variant-numeric:tabular-nums; opacity:.75;
                   border-left:1px solid var(--accent-line); padding-left:7px}
   .chip.on{background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700}
-  .chip.on.mine::before{background:var(--accent-ink); opacity:.55}
   .inline{width:100%; border:1px solid var(--line-strong); background:var(--surface); color:var(--ink);
           border-radius:9px; padding:8px 10px; outline:none; font-size:15px}
   .inline:focus{border-color:var(--accent)}
@@ -338,7 +338,7 @@
     ["腕の日", ["アームカール","ハンマーカール","ケーブルプレスダウン","フレンチプレス"]]
   ];
   var WD = ["日","月","火","水","木","金","土"];
-  var LS_KEY = "gymlog.state.v1", LS_THEME = "gymlog.theme";
+  var LS_KEY = "gymlog.state.v1", LS_THEME = "gymlog.theme", LS_DBX = "gymlog.dbx.v1";
   var DB_NAME = "gymlog", DB_STORE = "kv", DB_KEY = "state";
 
   /* ===================== 状態 ===================== */
@@ -347,7 +347,12 @@
     view: "record", date: keyOf(new Date()), chartEx: null, openDays: {},
     sheetEdit: false, sheetMode: "pick", editGenre: -1, lastCat: "その他", exOpen: false
   };
-  var idb = null, saveTimer = null;
+  var idb = null, saveTimer = null, saving = false, localFail = false;
+  // Dropbox（設定・トークンは端末内にのみ保存し、コードには一切含めない）
+  var dbx = { appKey:"", refreshToken:"", auto:true, verifier:"", lastSync:0, syncedAt:0, lastDated:"" };
+  var dbxToken = { access:"", exp:0 };
+  var dbxState = "idle";          // idle | syncing | error
+  var dbxTimer = null, dbxBusy = false, dbxErr = "";
 
   /* ===================== ユーティリティ ===================== */
   function keyOf(d){
@@ -569,13 +574,16 @@
     var okLs = false;
     try{ localStorage.setItem(LS_KEY, JSON.stringify(snap)); okLs = true; }catch(e){}
     idbPut(snap).then(function(okDb){
-      if (okLs || okDb) setSync("", "保存済み");
-      else setSync("off", "保存できません");
+      saving = false;
+      localFail = !(okLs || okDb);
+      updateStatus();
+      dbxSchedule();
     });
   }
   function touch(key){
     if (key) ensureDay(key).updatedAt = Date.now();
-    setSync("wait", "保存中");
+    saving = true;
+    updateStatus();
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(persist, 400);
   }
@@ -620,6 +628,181 @@
     if (!s) return;
     s.querySelector(".dot").className = "dot " + cls;
     document.getElementById("syncTxt").textContent = txt;
+  }
+  function updateStatus(){
+    if (localFail) return setSync("off", "保存できません");
+    if (saving) return setSync("wait", "保存中");
+    if (!dbxOn()) return setSync("", state.savedAt ? "保存済み" : "端末に保存");
+    if (dbxState === "syncing") return setSync("wait", "Dropbox 同期中");
+    if (dbxState === "error") return setSync("off", "Dropbox 未同期");
+    if (dbxDirty()) return setSync("wait", "Dropbox 未同期");
+    setSync("", "Dropbox 同期済み");
+  }
+
+  /* ===================== Dropbox 自動バックアップ =====================
+     PKCE（client secret なし）＋ リダイレクトなしの認証コード方式。
+     iOS のホーム画面アプリは外部サイトへのリダイレクトで戻ってこられないため、
+     認証コードを手で貼り付ける形にしている。 */
+  function dbxLoad(){
+    try{
+      var o = JSON.parse(localStorage.getItem(LS_DBX) || "null");
+      if (o && typeof o === "object"){
+        dbx.appKey = String(o.appKey || "");
+        dbx.refreshToken = String(o.refreshToken || "");
+        dbx.auto = o.auto !== false;
+        dbx.verifier = String(o.verifier || "");
+        dbx.lastSync = o.lastSync || 0;
+        dbx.syncedAt = o.syncedAt || 0;
+        dbx.lastDated = String(o.lastDated || "");
+      }
+    }catch(e){}
+  }
+  function dbxSave(){ try{ localStorage.setItem(LS_DBX, JSON.stringify(dbx)); }catch(e){} }
+  function dbxOn(){ return !!(dbx.appKey && dbx.refreshToken); }
+  function dbxDirty(){ return state.savedAt > (dbx.syncedAt || 0); }
+
+  function b64url(buf){
+    var b = "", a = new Uint8Array(buf);
+    for (var i = 0; i < a.length; i++) b += String.fromCharCode(a[i]);
+    return btoa(b).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function randVerifier(){
+    var a = new Uint8Array(64);
+    (window.crypto || {}).getRandomValues ? crypto.getRandomValues(a) : a.forEach(function(_, i){ a[i] = (Math.random()*256)|0; });
+    return b64url(a.buffer).slice(0, 96);
+  }
+  async function dbxAuthUrl(){
+    dbx.verifier = randVerifier();
+    dbxSave();
+    var digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(dbx.verifier));
+    return "https://www.dropbox.com/oauth2/authorize" +
+           "?client_id=" + encodeURIComponent(dbx.appKey) +
+           "&response_type=code&token_access_type=offline" +
+           "&code_challenge=" + b64url(digest) + "&code_challenge_method=S256";
+  }
+  function form(obj){
+    return Object.keys(obj).map(function(k){
+      return encodeURIComponent(k) + "=" + encodeURIComponent(obj[k]);
+    }).join("&");
+  }
+  async function dbxTokenCall(body){
+    var res = await fetch("https://api.dropboxapi.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form(body)
+    });
+    var txt = await res.text(), data = {};
+    try{ data = JSON.parse(txt); }catch(e){}
+    if (!res.ok) throw new Error(data.error_description || data.error || ("HTTP " + res.status));
+    return data;
+  }
+  async function dbxConnect(code){
+    code = (code || "").trim();
+    if (!dbx.appKey){ toast("先に App key を保存してください"); return; }
+    if (!code){ toast("認証コードを貼り付けてください"); return; }
+    if (!dbx.verifier){ toast("もう一度「認証ページを開く」から始めてください"); return; }
+    try{
+      var d = await dbxTokenCall({
+        code: code, grant_type: "authorization_code",
+        client_id: dbx.appKey, code_verifier: dbx.verifier
+      });
+      if (!d.refresh_token) throw new Error("リフレッシュトークンが返りませんでした");
+      dbx.refreshToken = d.refresh_token;
+      dbx.verifier = "";
+      dbxToken.access = d.access_token || "";
+      dbxToken.exp = Date.now() + ((d.expires_in || 14400) - 300) * 1000;
+      dbxState = "idle"; dbxErr = "";
+      dbxSave(); render(); updateStatus();
+      toast("Dropbox に接続しました");
+      dbxSync(true);
+    }catch(e){
+      toast("接続できませんでした：" + e.message);
+    }
+  }
+  async function dbxAccess(){
+    if (dbxToken.access && Date.now() < dbxToken.exp) return dbxToken.access;
+    var d = await dbxTokenCall({
+      grant_type: "refresh_token", refresh_token: dbx.refreshToken, client_id: dbx.appKey
+    });
+    dbxToken.access = d.access_token;
+    dbxToken.exp = Date.now() + ((d.expires_in || 14400) - 300) * 1000;
+    return dbxToken.access;
+  }
+  // Dropbox-API-Arg ヘッダーは ASCII しか通らないため非 ASCII を退避する
+  function headerSafe(s){
+    return s.replace(/[\u007f-￿]/g, function(c){
+      return "\\u" + ("0000" + c.charCodeAt(0).toString(16)).slice(-4);
+    });
+  }
+  async function dbxUpload(path, text){
+    var token = await dbxAccess();
+    var res = await fetch("https://content.dropboxapi.com/2/files/upload", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Dropbox-API-Arg": headerSafe(JSON.stringify({
+          path: path, mode: "overwrite", autorename: false, mute: true
+        })),
+        "Content-Type": "application/octet-stream"
+      },
+      body: new Blob([text], { type: "application/octet-stream" })
+    });
+    if (!res.ok){
+      var t = await res.text();
+      throw new Error("HTTP " + res.status + " " + t.slice(0, 160));
+    }
+  }
+  function dbxSchedule(){
+    if (!dbxOn() || !dbx.auto || !dbxDirty()) return;
+    if (dbxTimer) clearTimeout(dbxTimer);
+    dbxTimer = setTimeout(function(){ dbxSync(false); }, 5000);
+  }
+  async function dbxSync(manual){
+    if (!dbxOn()){ if (manual) toast("先に Dropbox に接続してください"); return; }
+    if (dbxBusy) return;
+    if (!manual && !dbxDirty()) return;
+    dbxBusy = true; dbxState = "syncing"; updateStatus();
+    var at = state.savedAt;
+    try{
+      var payload = JSON.stringify({
+        app: "gymlog", version: 2, exported: new Date().toISOString(),
+        days: state.days, exercises: state.exercises, genres: state.genres
+      });
+      await dbxUpload("/gymlog-backup.json", payload);
+      var d = keyOf(new Date());
+      if (dbx.lastDated !== d){
+        try{ await dbxUpload("/history/gymlog-" + d + ".json", payload); dbx.lastDated = d; }catch(e){}
+      }
+      dbx.lastSync = Date.now();
+      dbx.syncedAt = at;
+      state.lastBackup = dbx.lastSync;
+      dbxState = "idle"; dbxErr = "";
+      dbxSave(); persistQuiet();
+      if (manual) toast("Dropbox に保存しました");
+      if (state.view === "settings") render();
+    }catch(e){
+      dbxState = "error";
+      dbxErr = e.message || "不明なエラー";
+      if (manual) toast("同期できませんでした：" + dbxErr);
+      if (state.view === "settings") render();
+    }
+    dbxBusy = false;
+    updateStatus();
+  }
+  // 同期結果の記録だけを保存する（savedAt を動かさないので再同期を誘発しない）
+  function persistQuiet(){
+    var snap = snapshot();
+    snap.savedAt = state.savedAt;
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(snap)); }catch(e){}
+    idbPut(snap);
+  }
+  function dbxDisconnect(){
+    if (!window.confirm("Dropbox との接続を解除します。\nDropbox 上のバックアップは消えません。\nよろしいですか？")) return;
+    dbx.refreshToken = ""; dbx.verifier = ""; dbx.lastSync = 0; dbx.syncedAt = 0; dbx.lastDated = "";
+    dbxToken = { access:"", exp:0 };
+    dbxState = "idle"; dbxErr = "";
+    dbxSave(); render(); updateStatus();
+    toast("接続を解除しました");
   }
 
   /* ===================== トースト ===================== */
@@ -877,6 +1060,8 @@
       '<div class="row"><span class="t">バックアップから復元<small>書き出した JSON を読み込んで統合</small></span><button class="btn" data-act="import">ファイルを選ぶ</button></div>' +
       '</div>';
 
+    h += viewDropbox();
+
     h += '<div class="sec"><div class="sechd"><span class="lbl">表示</span></div>' +
       '<div class="row"><span class="t">テーマ<small>端末の設定に合わせるか、固定するか</small></span>' +
       '<span class="seg">' +
@@ -931,6 +1116,60 @@
 
     h += '<p class="note">記録はこの端末の中（localStorage と IndexedDB の両方）に保存され、外部には一切送信されません。' +
          'Safari の履歴消去やアプリの削除で消えるため、ときどき JSON バックアップを取ってください。</p>';
+    return h;
+  }
+
+  /* ===================== 設定：Dropbox ===================== */
+  function whenTxt(ms){
+    if (!ms) return "まだ同期していません";
+    var d = new Date(ms), diff = Math.floor((Date.now() - ms)/60000);
+    var hhmm = String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+    if (diff < 1) return "たった今";
+    if (diff < 60) return diff + " 分前（" + hhmm + "）";
+    if (keyOf(d) === keyOf(new Date())) return "今日 " + hhmm;
+    return (d.getMonth()+1) + "/" + d.getDate() + " " + hhmm;
+  }
+  function viewDropbox(){
+    var h = '<div class="sec"><div class="sechd"><span class="lbl">Dropbox 自動バックアップ</span></div>';
+
+    if (!dbx.appKey){
+      h += '<div class="row"><span class="t">まだ設定されていません' +
+           '<small>記録を Dropbox のアプリ専用フォルダへ自動で保存できます</small></span></div>' +
+           '<div class="row"><span class="t" style="font-size:12px;font-weight:400;color:var(--ink-3);line-height:1.7">' +
+           '1. <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener">Dropbox の App Console</a> で Create app<br>' +
+           '2. Scoped access →「App folder」→ アプリ名を入力<br>' +
+           '3. Permissions タブで <code>files.content.write</code> と <code>files.content.read</code> にチェックして Submit<br>' +
+           '4. Settings タブの App key を下に貼り付け</span></div>';
+    }
+    h += '<div class="row"><span class="t"><input id="dbxKey" class="inline" placeholder="App key" aria-label="Dropbox App key" value="' +
+         esc(dbx.appKey) + '"></span><button class="btn' + (dbx.appKey ? "" : " pri") + '" data-act="dbxkey">保存</button></div>';
+
+    if (dbx.appKey && !dbx.refreshToken){
+      h += '<div class="row"><span class="t">認証する<small>開いたページで「許可」を押すと認証コードが出ます。コピーして下に貼り付けてください。</small></span>' +
+           '<button class="btn pri" data-act="dbxauth">認証ページを開く</button></div>' +
+           '<div class="row"><span class="t"><input id="dbxCode" class="inline" placeholder="認証コードを貼り付け" aria-label="認証コード"></span>' +
+           '<button class="btn pri" data-act="dbxconnect">接続</button></div>';
+    }
+
+    if (dbxOn()){
+      var st = dbxState === "syncing" ? "同期中"
+             : dbxState === "error" ? "エラー：" + esc(dbxErr)
+             : dbxDirty() ? "未同期の変更があります" : "最新の状態です";
+      h += '<div class="row"><span class="t">接続済み<small>' + st + '</small></span>' +
+           '<button class="btn" data-act="dbxsync">今すぐ同期</button></div>' +
+           '<div class="row"><span class="t">最終同期<small>' + whenTxt(dbx.lastSync) +
+           '　保存先：アプリ／' + esc("ジムログ") + '／gymlog-backup.json</small></span></div>' +
+           '<div class="row"><span class="t">自動で同期<small>記録を変えた数秒後と、アプリを開いたときに送ります</small></span>' +
+           '<span class="seg"><button data-act="dbxauto" data-v="1" aria-pressed="' + (dbx.auto === true) + '">する</button>' +
+           '<button data-act="dbxauto" data-v="0" aria-pressed="' + (dbx.auto === false) + '">しない</button></span></div>' +
+           '<div class="row"><span class="t">接続を解除<small>端末内のトークンを消します。Dropbox 上のファイルは残ります。</small></span>' +
+           '<button class="btn dan" data-act="dbxoff">解除</button></div>';
+    }
+
+    h += '<div class="row"><span class="t" style="font-size:12px;font-weight:400;color:var(--ink-3)">' +
+         'App key とトークンはこの端末内にだけ保存され、リポジトリには含まれません。' +
+         'アプリが触れるのは Dropbox 内の専用フォルダだけです。' +
+         'iOS では画面を開いている間にしか送信できないため、閉じている間の自動送信はできません。</span></div></div>';
     return h;
   }
 
@@ -1393,6 +1632,34 @@
       if (act === "delcustom"){ removeExercise(b.dataset.n); return; }
       if (act === "toggleexlist"){ state.exOpen = !state.exOpen; render(); return; }
       if (act === "restoreseed"){ restoreSeed(); return; }
+      if (act === "dbxkey"){
+        var ki = document.getElementById("dbxKey");
+        dbx.appKey = (ki ? ki.value : "").trim();
+        dbxSave(); render();
+        toast(dbx.appKey ? "App key を保存しました" : "App key を消去しました");
+        return;
+      }
+      if (act === "dbxauth"){
+        dbxAuthUrl().then(function(url){
+          var a = document.createElement("a");
+          a.href = url; a.target = "_blank"; a.rel = "noopener";
+          document.body.appendChild(a); a.click(); a.remove();
+        }).catch(function(){ toast("認証ページを開けませんでした"); });
+        return;
+      }
+      if (act === "dbxconnect"){
+        var ci = document.getElementById("dbxCode");
+        dbxConnect(ci ? ci.value : "");
+        return;
+      }
+      if (act === "dbxsync"){ dbxSync(true); return; }
+      if (act === "dbxauto"){
+        dbx.auto = b.dataset.v === "1";
+        dbxSave(); render();
+        if (dbx.auto) dbxSchedule();
+        return;
+      }
+      if (act === "dbxoff"){ dbxDisconnect(); return; }
       if (act === "setcat") return;   // change イベントで処理
       if (act === "editgenre"){ editGenre(+b.dataset.i); return; }
       if (act === "delgenre"){ deleteGenre(+b.dataset.i); return; }
@@ -1404,7 +1671,7 @@
       if (act === "wipe"){
         if (!window.confirm("すべての記録を削除します。取り消せません。続けますか？")) return;
         if (!window.confirm("本当に削除しますか？バックアップは取ってありますか？")) return;
-        state.days = {}; state.custom = []; state.hidden = []; state.lastBackup = 0; state.openDays = {};
+        state.days = {}; state.lastBackup = 0; state.openDays = {};
         persist(); render(); toast("すべての記録を削除しました"); return;
       }
     }
@@ -1456,6 +1723,7 @@
     if (document.visibilityState !== "visible") return;
     var t = keyOf(new Date());
     if (state.view === "record" && state.date !== t && !dayOf(state.date)) { state.date = t; render(); }
+    if (dbxOn() && dbx.auto && dbxDirty()) dbxSync(false);
   });
 
   /* ===================== Service Worker ===================== */
@@ -1488,10 +1756,15 @@
 
   /* ===================== 起動 ===================== */
   applyTheme(getTheme());
+  dbxLoad();
   loadAll().then(function(){
     render();
-    setSync("", state.savedAt ? "保存済み" : "端末に保存");
+    updateStatus();
     initSw();
+    if (dbxOn() && dbx.auto && dbxDirty()) setTimeout(function(){ dbxSync(false); }, 2500);
+    window.addEventListener("online", function(){
+      if (dbxOn() && dbx.auto && dbxDirty()) dbxSync(false);
+    });
   }).catch(function(){
     render();
     initSw();
