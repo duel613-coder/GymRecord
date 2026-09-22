@@ -47,10 +47,10 @@ favicon-32.png           ブラウザのタブアイコン
 ## 3. アプリを更新する
 
 1. `index.html` などを編集する
-2. **2か所のバージョン番号を必ず揃えて上げる**
+2. **3か所のバージョン番号を必ず揃えて上げる**
    ```js
-   sw.js        const CACHE = "gymlog-v7";        →  "gymlog-v8"
-   index.html   var APP_VERSION = "v7";           →  "v8"
+   sw.js        const CACHE = "gymlog-v8";        →  "gymlog-v9"
+   index.html   var APP_VERSION = "v8";           →  "v9"
    index.html   var APP_BUILT = "2026-09-23";     →  更新日
    ```
    `sw.js` を忘れると端末に古いキャッシュが残って新しい版が反映されません。

@@ -247,6 +247,8 @@
   .seg button{border:0; background:var(--surface); padding:8px 11px; font-size:12px; font-weight:700; color:var(--ink-3)}
   .seg button[aria-pressed="true"]{background:var(--accent-soft); color:var(--accent)}
   .note{font-size:12px; color:var(--ink-3); line-height:1.65; padding:0 4px}
+  .ver{flex:none; font-size:13px; font-weight:800; color:var(--ink-2); font-variant-numeric:tabular-nums;
+       background:var(--surface-2); border-radius:8px; padding:5px 10px}
   .row a{color:var(--accent); text-underline-offset:2px}
   .row code{background:var(--surface-2); padding:1px 5px; border-radius:4px; font-size:11px;
             font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -381,6 +383,9 @@
   var CATS = ["胸","背中","脚","肩","腕","体幹","その他"];
   var STEPS = [0.5, 1, 1.25, 2, 2.5, 5, 10];   // ＋− ボタンの刻み（kg）
   var DEFAULT_STEP = 2.5;
+  // sw.js の CACHE と必ず揃える（ずれていれば設定画面が警告を出す）
+  var APP_VERSION = "v8";
+  var APP_BUILT = "2026-09-23";
   // ジャンル＝その日のメニュー構成。初回だけ用意し、以降は利用者が自由に編集する
   var DEFAULT_GENRES = [
     ["胸の日", ["ベンチプレス","インクラインベンチプレス","チェストプレス","ペックフライ"]],
@@ -407,6 +412,7 @@
   var dbxToken = { access:"", exp:0 };
   var dbxState = "idle";          // idle | syncing | error
   var dbxTimer = null, dbxBusy = false, dbxErr = "";
+  var swCache = null;   // 実際に端末に載っているキャッシュ名（null = 未確認）
   var DBX_IDLE_MS = 15000;        // 最後の操作から15秒たったら送る
 
   /* ===================== ユーティリティ ===================== */
@@ -1304,9 +1310,28 @@
       '<div class="row"><span class="t">すべての記録を削除<small>取り消せません。種目とジャンルの設定は残ります。</small></span>' +
       '<button class="btn dan" data-act="wipe">削除</button></div></div>';
 
-    h += '<p class="note">記録はこの端末の中（localStorage と IndexedDB の両方）に保存され、外部には一切送信されません。' +
+    h += viewAbout();
+
+    h += '<p class="note">記録はこの端末の中（localStorage と IndexedDB の両方）に保存されます。' +
          'Safari の履歴消去やアプリの削除で消えるため、ときどき JSON バックアップを取ってください。</p>';
     return h;
+  }
+
+  function viewAbout(){
+    var live = swCache === null ? "確認中…" : (swCache || "なし（ブラウザで直接表示中）");
+    var stale = swCache && swCache.indexOf(APP_VERSION) < 0;
+
+    var h = '<div class="sec"><div class="sechd"><span class="lbl">アプリについて</span></div>' +
+      '<div class="row"><span class="t">バージョン<small>' + APP_BUILT + '</small></span>' +
+      '<span class="ver">' + APP_VERSION + '</span></div>' +
+      '<div class="row"><span class="t">端末のキャッシュ<small>' + esc(live) + '</small></span>' +
+      '<button class="btn" data-act="swcheck">更新を確認</button></div>';
+
+    if (stale){
+      h += '<div class="row"><span class="t" style="font-size:12px;font-weight:400;color:var(--gold)">' +
+           '端末に古いキャッシュが残っています。「更新を確認」を押すか、アプリを閉じて開き直してください。</span></div>';
+    }
+    return h + '</div>';
   }
 
   /* ===================== 設定：Dropbox ===================== */
@@ -1881,6 +1906,17 @@
         return;
       }
       if (act === "dbxoff"){ dbxDisconnect(); return; }
+      if (act === "swcheck"){
+        readSwCache();
+        if (!("serviceWorker" in navigator)){ toast("この環境では確認できません"); return; }
+        navigator.serviceWorker.getRegistration().then(function(reg){
+          if (!reg){ toast("Service Worker が登録されていません"); return; }
+          return reg.update().then(function(){
+            toast(reg.waiting ? "新しいバージョンがあります" : "最新です");
+          });
+        }).catch(function(){ toast("確認できませんでした"); });
+        return;
+      }
       if (act === "setcat" || act === "setstep") return;   // change イベントで処理
       if (act === "editgenre"){ editGenre(+b.dataset.i); return; }
       if (act === "delgenre"){ deleteGenre(+b.dataset.i); return; }
@@ -1963,6 +1999,13 @@
   });
 
   /* ===================== Service Worker ===================== */
+  function readSwCache(){
+    if (!window.caches || !caches.keys){ swCache = ""; return; }
+    caches.keys().then(function(ks){
+      swCache = ks.filter(function(k){ return k.indexOf("gymlog-") === 0; }).join(", ");
+      if (state.view === "settings") render();
+    }).catch(function(){ swCache = ""; });
+  }
   function initSw(){
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.register("sw.js").then(function(reg){
@@ -1997,6 +2040,7 @@
     render();
     updateStatus();
     initSw();
+    readSwCache();
     if (dbxOn() && dbx.auto && dbxDirty()) setTimeout(function(){ dbxSync(false); }, 2500);
     window.addEventListener("online", function(){
       if (dbxOn() && dbx.auto && dbxDirty()) dbxSync(false);
