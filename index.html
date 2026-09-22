@@ -244,6 +244,11 @@
                   border-radius:10px; padding:10px 5px; outline:none; font-size:15px; font-weight:700}
   .catsel{flex:none; border:1px solid var(--line-strong); background:var(--surface); color:var(--ink);
           border-radius:9px; padding:7px 4px; font-size:12.5px; font-weight:700; outline:none}
+  .stepsel{flex:none; align-self:center; border:1px solid var(--line-strong); background:var(--surface-2);
+           color:var(--ink-2); border-radius:8px; padding:5px 2px 5px 5px; font-size:12px; font-weight:700;
+           outline:none; font-variant-numeric:tabular-nums}
+  .row.stack{flex-wrap:wrap; row-gap:9px}
+  .row.stack .t{flex:1 1 100%}
   .chip.genre{display:inline-flex; align-items:center; gap:7px; font-weight:700;
               border-color:var(--accent-line); background:var(--accent-soft); color:var(--accent)}
   .chip.genre .gn{font-size:11px; font-weight:800; font-variant-numeric:tabular-nums; opacity:.75;
@@ -329,6 +334,8 @@
     ["体幹", ["アブドミナルクランチ","トーソローテーション","レッグレイズ","プランク","バックエクステンション"]]
   ];
   var CATS = ["胸","背中","脚","肩","腕","体幹","その他"];
+  var STEPS = [0.5, 1, 1.25, 2, 2.5, 5, 10];   // ＋− ボタンの刻み（kg）
+  var DEFAULT_STEP = 2.5;
   // ジャンル＝その日のメニュー構成。初回だけ用意し、以降は利用者が自由に編集する
   var DEFAULT_GENRES = [
     ["胸の日", ["ベンチプレス","インクラインベンチプレス","チェストプレス","ペックフライ"]],
@@ -353,6 +360,7 @@
   var dbxToken = { access:"", exp:0 };
   var dbxState = "idle";          // idle | syncing | error
   var dbxTimer = null, dbxBusy = false, dbxErr = "";
+  var DBX_IDLE_MS = 15000;        // 最後の操作から15秒たったら送る
 
   /* ===================== ユーティリティ ===================== */
   function keyOf(d){
@@ -422,14 +430,18 @@
   function normEx(list){
     var out = [], seen = {};
     (list || []).forEach(function(x){
-      var name = null, cat = null;
+      var name = null, cat = null, step = null;
       if (typeof x === "string") name = x;
-      else if (x && typeof x === "object"){ name = x.name; cat = x.cat; }
+      else if (x && typeof x === "object"){ name = x.name; cat = x.cat; step = x.step; }
       if (typeof name !== "string") return;
       name = name.trim();
       if (!name || seen[name]) return;
       seen[name] = 1;
-      out.push({ name: name, cat: CATS.indexOf(cat) >= 0 ? cat : "その他" });
+      out.push({
+        name: name,
+        cat: CATS.indexOf(cat) >= 0 ? cat : "その他",
+        step: STEPS.indexOf(+step) >= 0 ? +step : DEFAULT_STEP
+      });
     });
     return out;
   }
@@ -437,6 +449,19 @@
     for (var i = 0; i < state.exercises.length; i++)
       if (state.exercises[i].name === name) return i;
     return -1;
+  }
+  function stepOf(name){
+    var i = findEx(name);
+    var s = i >= 0 ? state.exercises[i].step : DEFAULT_STEP;
+    return STEPS.indexOf(+s) >= 0 ? +s : DEFAULT_STEP;
+  }
+  function stepSelect(name, cls){
+    var cur = stepOf(name);
+    return '<select class="' + cls + '" data-act="setstep" data-n="' + esc(name) +
+           '" aria-label="' + esc(name) + ' の増減幅">' +
+           STEPS.map(function(v){
+             return '<option value="' + v + '"' + (v === cur ? " selected" : "") + '>±' + v + '</option>';
+           }).join("") + '</select>';
   }
   function exIn(cat){
     return state.exercises.filter(function(c){ return c.cat === cat; });
@@ -755,7 +780,13 @@
   function dbxSchedule(){
     if (!dbxOn() || !dbx.auto || !dbxDirty()) return;
     if (dbxTimer) clearTimeout(dbxTimer);
-    dbxTimer = setTimeout(function(){ dbxSync(false); }, 5000);
+    dbxTimer = setTimeout(function(){ dbxSync(false); }, DBX_IDLE_MS);
+  }
+  // 操作が続いている間は送信を先送りする（最後の操作から15秒の無操作で発火）
+  function dbxNudge(){
+    if (!dbxTimer) return;
+    clearTimeout(dbxTimer);
+    dbxTimer = setTimeout(function(){ dbxSync(false); }, DBX_IDLE_MS);
   }
   async function dbxSync(manual){
     if (!dbxOn()){ if (manual) toast("先に Dropbox に接続してください"); return; }
@@ -838,7 +869,8 @@
         h += lt
           ? '<span class="prev">前回 ' + esc(lt.date.slice(5).replace("-","/")) + '　<b>' + fmt(lt.max) + 'kg</b> ／ ボリューム <b>' + fmt(lt.vol) + 'kg</b></span>'
           : '<span class="prev">初めての種目</span>';
-        h += '</div><button class="icbtn" data-act="delex" aria-label="種目を削除">✕</button></div>';
+        h += '</div>' + stepSelect(en.name, "stepsel") +
+             '<button class="icbtn" data-act="delex" aria-label="種目を削除">✕</button></div>';
 
         h += '<div class="sets"><div class="shead"><span>#</span><span>重量 KG</span><span>回数 REPS</span><span></span></div>';
         (en.sets || []).forEach(function(s, si){
@@ -1096,13 +1128,14 @@
           return (CATS.indexOf(a.cat) - CATS.indexOf(b.cat)) || a.name.localeCompare(b.name, "ja");
         }).forEach(function(c){
           var n = usesOf(c.name);
-          h += '<div class="row"><span class="t">' + esc(c.name) +
+          h += '<div class="row stack"><span class="t">' + esc(c.name) +
                '<small>' + (n ? n + " 日ぶんの記録あり" : "まだ記録なし") + '</small></span>' +
                '<select class="catsel" data-act="setcat" data-n="' + esc(c.name) + '" aria-label="' + esc(c.name) + ' のカテゴリ">' +
                  CATS.map(function(x){
                    return '<option value="' + x + '"' + (x === c.cat ? " selected" : "") + '>' + x + '</option>';
                  }).join("") +
-               '</select><button class="btn dan" data-act="delcustom" data-n="' + esc(c.name) + '">削除</button></div>';
+               '</select>' + stepSelect(c.name, "catsel") +
+               '<button class="btn dan" data-act="delcustom" data-n="' + esc(c.name) + '">削除</button></div>';
         });
       }
     }
@@ -1589,7 +1622,7 @@
       if (act === "w+" || act === "w-" || act === "r+" || act === "r-"){
         var input = row.querySelector(act.charAt(0) === "w" ? ".w" : ".r");
         var cur = parseFloat(input.value) || 0;
-        var step = act.charAt(0) === "w" ? 2.5 : 1;
+        var step = act.charAt(0) === "w" ? stepOf(day.entries[ei].name) : 1;
         var next = Math.max(0, round1(cur + (act.charAt(1) === "+" ? step : -step)));
         input.value = next || "";
         commitSet(ei, si, act.charAt(0), next);
@@ -1660,7 +1693,7 @@
         return;
       }
       if (act === "dbxoff"){ dbxDisconnect(); return; }
-      if (act === "setcat") return;   // change イベントで処理
+      if (act === "setcat" || act === "setstep") return;   // change イベントで処理
       if (act === "editgenre"){ editGenre(+b.dataset.i); return; }
       if (act === "delgenre"){ deleteGenre(+b.dataset.i); return; }
       if (act === "addgenre"){
@@ -1700,14 +1733,26 @@
 
   stackEl.addEventListener("change", function(ev){
     var t = ev.target;
-    if (!t.classList || !t.classList.contains("catsel")) return;
+    if (!t.classList || !t.dataset) return;
     var i = findEx(t.dataset.n);
     if (i < 0) return;
-    state.exercises[i].cat = t.value;
-    state.lastCat = t.value;
-    persist();
-    render();
-    toast(t.dataset.n + " を「" + t.value + "」に移動しました");
+
+    if (t.dataset.act === "setstep"){
+      var v = +t.value;
+      if (STEPS.indexOf(v) < 0) return;
+      state.exercises[i].step = v;
+      persist();
+      if (state.view === "settings") render();
+      toast(t.dataset.n + " の増減幅を ±" + v + "kg にしました");
+      return;
+    }
+    if (t.classList.contains("catsel") && t.dataset.act === "setcat"){
+      state.exercises[i].cat = t.value;
+      state.lastCat = t.value;
+      persist();
+      render();
+      toast(t.dataset.n + " を「" + t.value + "」に移動しました");
+    }
   });
 
   function commitSet(ei, si, field, val){
@@ -1719,6 +1764,9 @@
   }
 
   // 日付をまたいだままアプリを開き直したときに今日へ戻す
+  document.addEventListener("pointerdown", dbxNudge, true);
+  document.addEventListener("keydown", dbxNudge, true);
+
   document.addEventListener("visibilitychange", function(){
     if (document.visibilityState !== "visible") return;
     var t = keyOf(new Date());
